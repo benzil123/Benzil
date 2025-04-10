@@ -1,0 +1,32 @@
+import re
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.naive_bayes import MultinomialNB
+
+# Sample tweets
+tweets = [
+    "Massive accident on highway 50, traffic blocked",
+    "Smooth ride today, no traffic",
+    "Road closed due to flooding downtown",
+    "All clear on the bridge",
+    "Heavy congestion on Main St due to construction"
+]
+
+# Labels: 1 = incident, 0 = no incident
+labels = [1, 0, 1, 0, 1]
+
+# Clean text
+def preprocess(text):
+    return re.sub(r'\W+', ' ', text.lower())
+
+tweets_cleaned = [preprocess(t) for t in tweets]
+
+# Vectorize and train
+vec = CountVectorizer()
+X = vec.fit_transform(tweets_cleaned)
+model = MultinomialNB()
+model.fit(X, labels)
+
+# Predict
+test_tweet = preprocess("Accident reported near Central Ave")
+X_test = vec.transform([test_tweet])
+print("Incident Detected:" if model.predict(X_test)[0] else "No Incident")

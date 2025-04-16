@@ -1,32 +1,54 @@
+import pandas as pd
+import numpy as np
 import re
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.naive_bayes import MultinomialNB
+import nltk
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, accuracy_score
 
-# Sample tweets
-tweets = [
-    "Massive accident on highway 50, traffic blocked",
-    "Smooth ride today, no traffic",
-    "Road closed due to flooding downtown",
-    "All clear on the bridge",
-    "Heavy congestion on Main St due to construction"
-]
+# Download stopwords
+nltk.download('stopwords')
+from nltk.corpus import stopwords
 
-# Labels: 1 = incident, 0 = no incident
-labels = [1, 0, 1, 0, 1]
+# Load your dataset (use your fixed CSV file)
+df = pd.read_csv('fixed_tweets.csv')  # or 'cleaned_tweets.csv' depending on your filename
 
-# Clean text
-def preprocess(text):
-    return re.sub(r'\W+', ' ', text.lower())
+# Basic text cleaning
+def clean_text(text):
+    text = str(text).lower()
+    text = re.sub(r"http\S+", "", text)          # remove URLs
+    text = re.sub(r"@\w+", "", text)             # remove mentions
+    text = re.sub(r"#", "", text)                # remove hashtag symbol
+    text = re.sub(r"[^\w\s]", "", text)          # remove punctuation
+    text = re.sub(r"\d+", "", text)              # remove numbers
+    text = ' '.join([word for word in text.split() if word not in stopwords.words('english')])
+    return text
 
-tweets_cleaned = [preprocess(t) for t in tweets]
+df['clean_text'] = df['text'].apply(clean_text)
 
-# Vectorize and train
-vec = CountVectorizer()
-X = vec.fit_transform(tweets_cleaned)
-model = MultinomialNB()
-model.fit(X, labels)
+# Auto-label tweets using simple keyword detection
+incident_keywords = ['accident', 'jam', 'crash', 'block', 'stuck', 'congestion', 'incident', 'delay', 'slow', 'traffic']
 
-# Predict
-test_tweet = preprocess("Accident reported near Central Ave")
-X_test = vec.transform([test_tweet])
-print("Incident Detected:" if model.predict(X_test)[0] else "No Incident")
+def is_incident(tweet):
+    tweet = tweet.lower()
+    return int(any(word in tweet for word in incident_keywords))
+
+df['label'] = df['text'].apply(is_incident)
+
+# Vectorize text using TF-IDF
+vectorizer = TfidfVectorizer(max_features=5000)
+X = vectorizer.fit_transform(df['clean_text'])
+y = df['label']
+
+# Split into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Train Logistic Regression model
+model = LogisticRegression()
+model.fit(X_train, y_train)
+
+# Evaluate model
+y_pred = model.predict(X_test)
+print("Accuracy:", accuracy_score(y_test, y_pred))
+print("\nClassification Report:\n", classification_report(y_test, y_pred))

@@ -1,54 +1,143 @@
 import pandas as pd
-import numpy as np
 import re
 import nltk
-from sklearn.model_selection import train_test_split
+import random
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
 
-# Download stopwords
 nltk.download('stopwords')
 from nltk.corpus import stopwords
 
-# Load your dataset (use your fixed CSV file)
-df = pd.read_csv('fixed_tweets.csv')  # or 'cleaned_tweets.csv' depending on your filename
+# Generate synthetic training data
+def generate_training_data(num_samples=2000):
+    incident_keywords = [
+        'accident', 'jam', 'crash', 'block', 'stuck', 'congestion', 'incident',
+        'delay', 'slow', 'traffic', 'pileup', 'standstill', 'snarl', 'holdup',
+        'roadblock', 'wreck', 'collision', 'blocked', 'gridlock', 'bottleneck'
+    ]
+    
+    non_incident_keywords = [
+        'smooth', 'clear', 'flowing', 'moving', 'easy', 'light', 'normal',
+        'free', 'empty', 'fast', 'quick', 'pleasant', 'enjoyable', 'calm'
+    ]
+    
+    locations = ['highway', 'freeway', 'intersection', 'bridge', 'tunnel', 
+                 'downtown', 'main street', 'expressway', 'overpass']
+    
+    data = []
+    
+    for _ in range(num_samples // 2):
+        kw = random.choice(incident_keywords)
+        loc = random.choice(locations)
+        templates = [
+            f"Major {kw} on {loc} avoid area",
+            f"Bad {kw} reported near {loc}",
+            f"Stuck in {kw} at {loc}",
+            f"Emergency vehicles at {loc} due to {kw}",
+            f"Police investigating {kw} on {loc}"
+        ]
+        data.append((random.choice(templates), 1))
+    
+    for _ in range(num_samples // 2):
+        kw = random.choice(non_incident_keywords)
+        loc = random.choice(locations)
+        templates = [
+            f"{loc} traffic moving {kw}",
+            f"{kw} traffic on {loc}",
+            f"Enjoying {kw} drive through {loc}",
+            f"No delays on {loc}, traffic is {kw}",
+            f"{loc} conditions are {kw} this morning"
+        ]
+        data.append((random.choice(templates), 0))
+    
+    random.shuffle(data)
+    texts, labels = zip(*data)
+    return pd.DataFrame({'text': texts, 'label': labels})
 
-# Basic text cleaning
+# Text cleaning
 def clean_text(text):
     text = str(text).lower()
-    text = re.sub(r"http\S+", "", text)          # remove URLs
-    text = re.sub(r"@\w+", "", text)             # remove mentions
-    text = re.sub(r"#", "", text)                # remove hashtag symbol
-    text = re.sub(r"[^\w\s]", "", text)          # remove punctuation
-    text = re.sub(r"\d+", "", text)              # remove numbers
-    text = ' '.join([word for word in text.split() if word not in stopwords.words('english')])
+    text = re.sub(r"http\S+|www\S+|https\S+", "", text)
+    text = re.sub(r"@\w+", "", text)
+    text = re.sub(r"#(\w+)", r"\1", text)
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
     return text
 
+# Generate and clean data
+df = generate_training_data()
 df['clean_text'] = df['text'].apply(clean_text)
 
-# Auto-label tweets using simple keyword detection
-incident_keywords = ['accident', 'jam', 'crash', 'block', 'stuck', 'congestion', 'incident', 'delay', 'slow', 'traffic']
+# Split data
+X_train, X_test, y_train, y_test = train_test_split(
+    df['clean_text'], df['label'], test_size=0.2, random_state=42
+)
 
-def is_incident(tweet):
-    tweet = tweet.lower()
-    return int(any(word in tweet for word in incident_keywords))
+# TF-IDF vectorizer
+vectorizer = TfidfVectorizer(
+    max_features=5000,
+    ngram_range=(1, 2),
+    stop_words='english'
+)
+X_train_vec = vectorizer.fit_transform(X_train)
+X_test_vec = vectorizer.transform(X_test)
 
-df['label'] = df['text'].apply(is_incident)
+# Logistic Regression
+model = LogisticRegression(
+    C=1.0,
+    class_weight='balanced',
+    max_iter=1000,
+    solver='liblinear'
+)
+model.fit(X_train_vec, y_train)
 
-# Vectorize text using TF-IDF
-vectorizer = TfidfVectorizer(max_features=5000)
-X = vectorizer.fit_transform(df['clean_text'])
-y = df['label']
+# Evaluation
+y_pred = model.predict(X_test_vec)
+print("Model Evaluation:")
+print(f"Accuracy: {accuracy_score(y_test, y_pred):.2f}")
+print(classification_report(y_test, y_pred, target_names=["Non-Incident", "Incident"]))
 
-# Split into training and testing sets
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+# Custom tweet classifier with irrelevant detection
+traffic_keywords = [
+    "traffic", "jam", "accident", "crash", "highway", "road", "block", "delay",
+    "freeway", "intersection", "tunnel", "bridge", "vehicle", "drive", "slow", "fast"
+]
 
-# Train Logistic Regression model
-model = LogisticRegression()
-model.fit(X_train, y_train)
+def classify_tweet(tweet, threshold=0.3):
+    cleaned = clean_text(tweet)
+    vectorized = vectorizer.transform([cleaned])
+    prob_incident = model.predict_proba(vectorized)[0][1]
 
-# Evaluate model
-y_pred = model.predict(X_test)
-print("Accuracy:", accuracy_score(y_test, y_pred))
-print("\nClassification Report:\n", classification_report(y_test, y_pred))
+    # Check if it even looks like a traffic-related tweet
+    contains_traffic = any(keyword in cleaned for keyword in traffic_keywords)
+
+    if not contains_traffic:
+        return f"Irrelevant (confidence: {prob_incident:.2f})"
+    
+    # If it is traffic-related, use probability to decide
+    prediction = "INCIDENT" if prob_incident >= threshold else "Non-Incident"
+    return f"{prediction} (confidence: {prob_incident:.2f})"
+
+
+# Test tweets
+test_tweets = [
+    "Massive traffic jam on the highway",
+    "Smooth flowing traffic downtown",
+    "Car crash reported at main street intersection",
+    "No delays on the freeway this morning",
+    "Standstill traffic near the bridge due to accident",
+    "car crash reported at tunnel",
+    "car accident on manglore",
+    "i am playing football",
+    "pizza party tonight",
+    "just chilling at home",
+    "police dog won a medal today",
+    "i love ice cream",
+    "i like dog"
+]
+
+print("\nCustom Tweet Classification:")
+for tweet in test_tweets:
+    print(f"- {tweet[:50]}... → {classify_tweet(tweet)}")
